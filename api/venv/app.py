@@ -1,76 +1,77 @@
-import os
-from flask import Flask, request, jsonify, send_from_directory
-from google.cloud import speech
-from transformers import pipeline
-import soundfile as sf
-import numpy as np
-from TTS.api import TTS
+from flask import Flask, request, jsonify
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+from spacy_langdetect import LanguageDetector
+import spacy
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# Initialize the Coqui TTS models
-coqui_tts_model_1 = TTS("tts_models/en/ljspeech/tacotron2-DDC")
-coqui_tts_model_2 = TTS("tts_models/en/ljspeech/glow-tts")
+# Load language model and tokenizer (example with GPT-2)
+model_name = "gpt2"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
 
-# Initialize other pipelines
-speech_client = speech.SpeechClient()
-language_detector = pipeline("language-detection")
+# Set special token ids
+pad_token_id = tokenizer.eos_token_id  # Set pad_token_id to eos_token_id for open-end generation
+
+# Set up sentiment analysis pipeline (example with Hugging Face Transformers)
 sentiment_analyzer = pipeline("sentiment-analysis")
-llm_model = pipeline("text-generation", model="gpt-2")  # Change to "facebook/llama2" if needed
+nlp = spacy.load("en_core_web_sm")
 
-def process_audio(audio_data):
-    # Convert audio to text using Google Speech-to-Text
-    audio = speech.RecognitionAudio(content=audio_data)
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-        language_code="en-US"
-    )
-    response = speech_client.recognize(config=config, audio=audio)
-    text = response.results[0].alternatives[0].transcript
+@spacy.Language.factory('language_detector')
+def create_language_detector(nlp, name):
+    return LanguageDetector()
 
-    # Detect language and sentiment of text
-    language = language_detector(text)[0]["language"]
-    sentiment = sentiment_analyzer(text)[0]["label"]
+nlp.add_pipe('language_detector')
 
-    # Create prompt template for LLM
-    prompt_template = f"Respond in {language} with a {sentiment} tone: "
-    prompt = prompt_template + text
+def detect_language(text):
+    doc = nlp(text)
+    return doc._.language['language']
 
-    # Generate response from LLM
-    llm_response = llm_model(prompt, max_length=100)
-
-    # Convert response to speech using TTS models
-    response_text = llm_response[0]["generated_text"]
-    coqui_audio_1 = coqui_tts_model_1.tts_to_file(text=response_text, file_path="static/coqui_output_1.wav")
-    coqui_audio_2 = coqui_tts_model_2.tts_to_file(text=response_text, file_path="static/coqui_output_2.wav")
-
-    # Return TTS output file paths
-    return "static/coqui_output_1.wav", "static/coqui_output_2.wav"
-
-@app.route('/process_audio', methods=['POST'])
-def process_audio_route():
-    if 'audio' not in request.files:
-        return jsonify({"error": "No audio file provided"}), 400
-
-    audio_file = request.files['audio']
-    audio_data = audio_file.read()
-
+@app.route('/process_question', methods=['POST'])
+def process_question():
     try:
-        coqui_audio_1, coqui_audio_2 = process_audio(audio_data)
+        data = request.get_json()
+        question = data['question']
 
-        # Send the TTS outputs back to the frontend
+        # Detect language of the question
+        language = detect_language(question)
+
+        # Analyze sentiment of the question
+        sentiment_result = sentiment_analyzer(question)
+        sentiment_label = sentiment_result[0]['label']
+
+        # Create prompt template based on language and sentiment
+        prompt_template = f"Respond in {language} with a {sentiment_label} tone like amazon customer service for this query:"
+        prompt = prompt_template + question
+        print(prompt)
+
+        # Tokenize the prompt
+        inputs = tokenizer(prompt, return_tensors="pt")
+
+
+        # Generate response from GPT-2 model with sampling
+        outputs_sampling = model.generate(
+            inputs['input_ids'],
+            attention_mask=inputs['attention_mask'],
+            max_length=200,
+            pad_token_id=pad_token_id,
+            num_return_sequences=1,
+            do_sample=True,
+            top_p=0.95,  # Nucleus sampling
+            top_k=50  # Top-k sampling
+        )
+
+        response_sampling = tokenizer.decode(outputs_sampling[0], skip_special_tokens=True)
+
         return jsonify({
-            "coqui_audio_1": coqui_audio_1,
-            "coqui_audio_2": coqui_audio_2
+            'response_sampling': response_sampling
         })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
-@app.route('/static/<path:filename>', methods=['GET'])
-def download_file(filename):
-    return send_from_directory('static', filename)
+    except Exception as e:
+        return str(e), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)

@@ -1,99 +1,53 @@
 import React, { useState } from 'react';
+import axios from 'axios';
+import { Container, TextField, Button, Typography, Box, Paper, Grid } from '@mui/material';
 
-function App() {
-  const [recording, setRecording] = useState(false);
-  const [audioUrl, setAudioUrl] = useState(null);
-  const [vallEAudio, setVallEAudio] = useState(null);
-  const [googleAudio, setGoogleAudio] = useState(null);
-  const [error, setError] = useState(null);
+const QuestionForm = () => {
+  const [question, setQuestion] = useState('');
+  const [responses, setResponses] = useState({});
 
-  let mediaRecorder;
-  let audioChunks = [];
-
-  const startRecording = async () => {
-    setRecording(true);
-    audioChunks = [];
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.start();
-
-    mediaRecorder.ondataavailable = event => {
-      audioChunks.push(event.data);
-    };
-
-    mediaRecorder.onstop = () => {
-      const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-      const audioUrl = URL.createObjectURL(audioBlob);
-      setAudioUrl(audioUrl);
-      sendAudioData(audioBlob);
-    };
-  };
-
-  const stopRecording = () => {
-    setRecording(false);
-    mediaRecorder.stop();
-  };
-
-  const sendAudioData = async (audioBlob) => {
-    const formData = new FormData();
-    formData.append('audio', audioBlob);
-
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     try {
-      const response = await fetch('http://localhost:5000/process_audio', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const data = await response.json();
-      if (response.ok) {
-        setVallEAudio(`http://localhost:5000/${data.vall_e_audio}`);
-        setGoogleAudio(`http://localhost:5000/${data.google_audio}`);
-      } else {
-        setError(data.error);
-      }
-    } catch (err) {
-      setError(err.message);
+      const response = await axios.post('http://localhost:5000/process_question', { question });
+      setResponses(response.data);
+    } catch (error) {
+      console.error('Error fetching response:', error);
     }
   };
 
   return (
-    <div>
-      <h1>Audio Recorder</h1>
-      {recording ? (
-        <button onClick={stopRecording}>Stop Recording</button>
-      ) : (
-        <button onClick={startRecording}>Start Recording</button>
-      )}
-
-      {audioUrl && (
-        <div>
-          <h2>Original Audio</h2>
-          <audio src={audioUrl} controls></audio>
-        </div>
-      )}
-
-      {vallEAudio && (
-        <div>
-          <h2>Vall-E TTS Audio</h2>
-          <audio src={vallEAudio} controls></audio>
-        </div>
-      )}
-
-      {googleAudio && (
-        <div>
-          <h2>Google TTS Audio</h2>
-          <audio src={googleAudio} controls></audio>
-        </div>
-      )}
-
-      {error && (
-        <div>
-          <h2>Error</h2>
-          <p>{error}</p>
-        </div>
-      )}
-    </div>
+    <Container maxWidth="sm" sx={{ mt: 5 }}>
+      <Paper elevation={3} sx={{ p: 3 }}>
+        <Typography variant="h5" gutterBottom>
+          Amazon Customer Service
+        </Typography>
+        <form onSubmit={handleSubmit}>
+          <TextField
+            label="Enter your question"
+            variant="outlined"
+            fullWidth
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            margin="normal"
+          />
+          <Box textAlign="center" sx={{ mt: 2 }}>
+            <Button variant="contained" color="primary" type="submit">
+              Ask
+            </Button>
+          </Box>
+        </form>
+        {responses.response_sampling && (
+          <Box mt={4}>
+            <Paper elevation={2} sx={{ p: 2 }}>
+              <Typography variant="h6">Response (Sampling):</Typography>
+              <Typography>{responses.response_sampling}</Typography>
+            </Paper>
+          </Box>
+        )}
+      </Paper>
+    </Container>
   );
-}
+};
 
-export default App;
+export default QuestionForm;
